@@ -1,0 +1,310 @@
+// ==========================================
+// โค้ดเต็มระบบ: เครื่องตัดท่อหด (V1.0)
+// รวม Keypad(0x20), 4 Buttons(0x38), LCD(0x27) และ Stepper Motor
+// ==========================================
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <Stepper.h>
+
+// --- ตั้งค่าจอ LCD และ I2C Address ---
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
+const uint8_t KEYPAD_ADDRESS = 0x20; // ไอซี U3
+const uint8_t BUTTON_ADDRESS = 0x38; // ไอซี U2 (PCF8574A)
+
+// --- ตั้งค่า Stepper Motor ---
+#define SM_IN1 19
+#define SM_IN2 18
+#define SM_IN3 5
+#define SM_IN4 17
+const int stepsPerRevolution = 2048; 
+Stepper myStepper(stepsPerRevolution, SM_IN1, SM_IN3, SM_IN2, SM_IN4); 
+
+// ** คาลิเบรทความแม่นยำ (สำคัญมาก) **
+// ตัวเลขนี้คือ "ต้องหมุนกี่สเต็ป ท่อถึงจะยาว 1 มิลลิเมตร"
+// ถ้าดึงแล้วท่อสั้นไป ให้เพิ่มเลขนี้ / ถ้ายาวไป ให้ลดเลขนี้
+const float STEPS_PER_MM = 65.0; 
+
+// --- ตั้งค่าขา Keypad ---
+const uint8_t rowPins[4] = {1, 6, 5, 3}; 
+const uint8_t colPins[3] = {2, 0, 4};    
+const char keys[4][3] = {
+  {'1', '2', '3'},
+  {'4', '5', '6'},
+  {'7', '8', '9'},
+  {'*', '0', '#'}
+};
+
+// --- ตัวแปรระบบเมนู ---
+int uiState = 0; // 0=ใส่ความยาว, 1=ใส่จำนวน, 2=พร้อมส่ง
+String inputLength = "";
+String inputQty = "";
+char lastKey = 'N';
+
+bool lastBtnOk = HIGH, lastBtnCancel = HIGH, lastBtnBack = HIGH, lastBtnNext = HIGH;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  
+  // ตั้งค่า LCD
+  lcd.init();
+  lcd.backlight();
+  
+  // สั่งไอซีปุ่มกดให้พร้อมรับข้อมูล
+  Wire.beginTransmission(BUTTON_ADDRESS);
+  Wire.write(0xFF);
+  Wire.endTransmission();
+
+  // ตั้งค่าความเร็วมอเตอร์
+  myStepper.setSpeed(12); // 12 RPM กำลังดีสำหรับแรงบิด
+  
+  updateDisplay();
+}
+
+// ----------------------------------------------------
+// ส่วนของฟังก์ชันอ่านปุ่มต่างๆ
+// ----------------------------------------------------
+char readKeypad() {
+  for (int r = 0; r < 4; r++) {
+    uint8_t writeByte = 0xFF;
+    writeByte &= ~(1 << rowPins[r]); 
+    
+    Wire.beginTransmission(KEYPAD_ADDRESS);
+    Wire.write(writeByte);
+    if (Wire.endTransmission() != 0) return 'E'; 
+
+    Wire.requestFrom((uint16_t)KEYPAD_ADDRESS, (uint8_t)1);
+    if (Wire.available()) {
+      uint8_t readByte = Wire.read();
+      for (int c = 0; c < 3; c++) {
+        if ((readByte & (1 << colPins[c])) == 0) {
+          Wire.beginTransmission(KEYPAD_ADDRESS);
+          Wire.write(0xFF);
+          Wire.endTransmission();
+          return keys[r][c]; 
+        }
+      }
+    }
+  }
+  Wire.beginTransmission(KEYPAD_ADDRESS);
+  Wire.write(0xFF);
+  Wire.endTransmission();
+  return 'N';
+}
+
+void updateDisplay() {
+  lcd.clear();
+  if (uiState == 0) {
+    lcd.setCursor(0, 0); lcd.print("Length (mm):"); 
+    lcd.setCursor(0, 1); lcd.print("> " + inputLength);
+  } 
+  else if (uiState == 1) {
+    lcd.setCursor(0, 0); lcd.print("Quantity (pcs):");
+    lcd.setCursor(0, 1); lcd.print("> " + inputQty);
+  }
+  else if (uiState == 2) {
+    lcd.setCursor(0, 0); lcd.print("L:" + inputLength + "mm Q:" + inputQty);
+    lcd.setCursor(0, 1); lcd.print("Press OK to Cut!"); 
+  }
+}
+
+void showError(String msg) {
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("Error:");
+  lcd.setCursor(0, 1); lcd.print(msg);
+  delay(2000); 
+  updateDisplay(); 
+}
+
+// ----------------------------------------------------
+// ฟังก์ชันช่วยเหลือสำหรับตรวจสอบปุ่ม Cancel (แบบ Real-time)
+// ----------------------------------------------------
+bool checkCancel() {
+  Wire.requestFrom((uint16_t)BUTTON_ADDRESS, (uint8_t)1);
+  if (Wire.available()) {
+    uint8_t btnState = Wire.read();
+    if ((btnState & (1 << 1)) == 0) return true; // ถ้าขา P1 (ปุ่ม Cancel) เป็น LOW แสดงว่าโดนกด
+  }
+  return false;
+}
+
+// ฟังก์ชันหน่วงเวลาที่สามารถกดยกเลิกกลางทางได้ (แทนที่ delay ปกติ)
+bool waitWithCancel(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) {
+    if (checkCancel()) return true; // ถ้ายกเลิก คืนค่า true
+    delay(10);
+  }
+  return false;
+}
+
+// ฟังก์ชันหมุนสเต็ปเปอร์ทีละสเต็ป เพื่อให้เช็คปุ่มยกเลิกได้ตลอดเวลา
+bool feedTube(long totalSteps) {
+  for (long s = 0; s < totalSteps; s++) {
+    myStepper.step(1);
+    // เช็คปุ่ม Cancel ทุกๆ 50 สเต็ป (ประมาณ 1 มิลลิเมตร) เพื่อไม่ให้มอเตอร์ดึงกระตุก
+    if (s % 50 == 0) {
+      if (checkCancel()) return false; // คืนค่า false ถ้ายกเลิก
+    }
+  }
+  return true; // สำเร็จ
+}
+
+// ----------------------------------------------------
+// ฟังก์ชันกระบวนการตัดท่อ (ทำงานเมื่อกด OK ในหน้า 2)
+// ----------------------------------------------------
+void startCuttingProcess() {
+  int length_mm = inputLength.toInt();
+  int quantity = inputQty.toInt();
+
+  if (length_mm <= 0 || quantity <= 0) {
+    showError("Invalid Value!");
+    return;
+  }
+
+  // คำนวณจำนวน Step ที่ต้องหมุน
+  long stepsToMove = (long)(length_mm * STEPS_PER_MM);
+  bool isCanceled = false; // ตัวแปรเก็บสถานะการยกเลิก
+
+  for (int i = 1; i <= quantity; i++) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Cut: "); lcd.print(i); lcd.print("/"); lcd.print(quantity);
+    
+    lcd.setCursor(0, 1);
+    lcd.print("Feeding "); lcd.print(length_mm); lcd.print("mm");
+    Serial.print("ชิ้นที่ "); Serial.print(i); Serial.print(" - กำลังดึงท่อ "); Serial.println(length_mm);
+    
+    // 1. หมุนมอเตอร์เพื่อฟีดท่อ (แบบเช็คปุ่มยกเลิกได้)
+    if (!feedTube(stepsToMove)) {
+      isCanceled = true;
+      break; // หลุดออกจากลูปตัดทันที
+    }
+    
+    // รอให้ท่อนิ่ง (แบบเช็คปุ่มยกเลิกได้)
+    if (waitWithCancel(500)) {
+      isCanceled = true;
+      break;
+    }
+
+    // 2. ขั้นตอนจำลองการตัดท่อ (รอใส่โค้ดคุม Servo ทีหลัง)
+    lcd.setCursor(0, 1);
+    lcd.print("Cutting...      ");
+    Serial.println(">> สับใบมีด (ตัด) <<");
+    
+    // หน่วงเวลาจำลองใบมีดตัดลงมาและยกขึ้น (แบบเช็คปุ่มยกเลิกได้)
+    if (waitWithCancel(1500)) {
+      isCanceled = true;
+      break;
+    }
+  }
+
+  // ทำงานเสร็จสิ้น หรือ ถูกยกเลิก
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  if (isCanceled) {
+    lcd.print("Process Canceled");
+    Serial.println("=> ยกเลิกการทำงานกลางทาง!");
+  } else {
+    lcd.print("Job Finished!");
+    lcd.setCursor(0, 1);
+    lcd.print("Success: "); lcd.print(quantity); lcd.print(" pcs");
+    Serial.println("=> เสร็จสิ้นการทำงานทั้งหมด!");
+  }
+  
+  delay(3000);
+
+  // รีเซ็ตค่ากลับไปหน้าแรก
+  inputLength = "";
+  inputQty = "";
+  uiState = 0;
+  updateDisplay();
+}
+
+// ----------------------------------------------------
+// ลูปหลักโปรแกรม
+// ----------------------------------------------------
+void loop() {
+  // --- 1. ตรวจสอบการพิมพ์ Keypad ---
+  char customKey = readKeypad();
+  if (customKey != 'N' && customKey != 'E' && customKey != lastKey) {
+    
+    if (customKey >= '0' && customKey <= '9') {
+      if (uiState == 0 && inputLength.length() < 4) {
+        inputLength += customKey;
+        updateDisplay();
+      } 
+      else if (uiState == 1 && inputQty.length() < 4) {
+        inputQty += customKey;
+        updateDisplay();
+      }
+    }
+    else if (customKey == '*') { // ลบตัวอักษร
+      if (uiState == 0 && inputLength.length() > 0) {
+        inputLength.remove(inputLength.length() - 1);
+        updateDisplay();
+      }
+      else if (uiState == 1 && inputQty.length() > 0) {
+        inputQty.remove(inputQty.length() - 1);
+        updateDisplay();
+      }
+    }
+    delay(50); 
+  }
+  lastKey = (customKey == 'N') ? 'N' : customKey;
+
+
+  // --- 2. อ่าน 4 ปุ่มกด ---
+  bool curOk = HIGH, curCancel = HIGH, curBack = HIGH, curNext = HIGH;
+  Wire.requestFrom((uint16_t)BUTTON_ADDRESS, (uint8_t)1);
+  if (Wire.available()) {
+    uint8_t btnState = Wire.read();
+    curOk     = (btnState & (1 << 0)) ? HIGH : LOW; // P0
+    curCancel = (btnState & (1 << 1)) ? HIGH : LOW; // P1
+    curBack   = (btnState & (1 << 2)) ? HIGH : LOW; // P2
+    curNext   = (btnState & (1 << 3)) ? HIGH : LOW; // P3
+  }
+
+  // ปุม NEXT
+  if (lastBtnNext == HIGH && curNext == LOW) {
+    if (uiState == 0) {
+      if (inputLength == "") showError("Pls specify size");
+      else { uiState = 1; updateDisplay(); }
+    }
+    delay(50);
+  }
+  
+  // ปุ่ม OK
+  if (lastBtnOk == HIGH && curOk == LOW) {
+    if (uiState == 1) {
+      if (inputQty == "") showError("Please fill qty!");
+      else { uiState = 2; updateDisplay(); }
+    }
+    else if (uiState == 2) {
+      // ** เริ่มทำงานตัดท่อ **
+      startCuttingProcess();
+    }
+    delay(50);
+  }
+
+  // ปุ่ม BACK
+  if (lastBtnBack == HIGH && curBack == LOW) {
+    if (uiState == 1) { uiState = 0; updateDisplay(); } 
+    else if (uiState == 2) { uiState = 1; updateDisplay(); }
+    delay(50);
+  }
+
+  // ปุ่ม CANCEL
+  if (lastBtnCancel == HIGH && curCancel == LOW) {
+    inputLength = ""; inputQty = ""; uiState = 0;
+    updateDisplay();
+    delay(50);
+  }
+
+  lastBtnNext = curNext;
+  lastBtnOk = curOk;
+  lastBtnBack = curBack;
+  lastBtnCancel = curCancel;
+  
+  delay(10); 
+}
