@@ -1,0 +1,214 @@
+// ==========================================
+// โค้ดระบบ UI เครื่องตัดท่อหด (เวอร์ชันสมบูรณ์)
+// - Keypad อยู่ที่ I2C Address 0x20
+// - 4 ปุ่มกด อยู่ที่ I2C Address 0x38
+// ==========================================
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
+
+// กำหนด Address ที่ถูกต้องตามที่สแกนเจอ
+const uint8_t KEYPAD_ADDRESS = 0x20;
+const uint8_t BUTTON_ADDRESS = 0x38;
+
+// --- ตั้งค่าขา Keypad (U3) ตามสายแพจริง ---
+const uint8_t rowPins[4] = {1, 6, 5, 3}; 
+const uint8_t colPins[3] = {2, 0, 4};    
+const char keys[4][3] = {
+  {'1', '2', '3'},
+  {'4', '5', '6'},
+  {'7', '8', '9'},
+  {'*', '0', '#'}
+};
+
+// --- ตัวแปรระบบเมนู ---
+int uiState = 0; // 0=ใส่ความยาว, 1=ใส่จำนวน, 2=หน้ายืนยัน
+String inputLength = "";
+String inputQty = "";
+char lastKey = 'N';
+
+// ตัวแปรจำสถานะปุ่มเพื่อป้องกันการกดเบิ้ล
+bool lastBtnOk = HIGH, lastBtnCancel = HIGH, lastBtnBack = HIGH, lastBtnNext = HIGH;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22);
+  
+  lcd.init();
+  lcd.backlight();
+  
+  // สั่งให้ไอซีปุ่มกด (0x38) เป็นโหมดรับข้อมูล โดยส่งลอจิก HIGH (1) ไปทุกขา
+  Wire.beginTransmission(BUTTON_ADDRESS);
+  Wire.write(0xFF);
+  Wire.endTransmission();
+  
+  // แสดงหน้าจอเริ่มต้น
+  updateDisplay();
+}
+
+// ฟังก์ชันสแกน Keypad (0x20)
+char readKeypad() {
+  for (int r = 0; r < 4; r++) {
+    uint8_t writeByte = 0xFF;
+    writeByte &= ~(1 << rowPins[r]); // สั่งให้แถวที่จะอ่านเป็น LOW
+    
+    Wire.beginTransmission(KEYPAD_ADDRESS);
+    Wire.write(writeByte);
+    if (Wire.endTransmission() != 0) return 'E'; 
+
+    Wire.requestFrom((uint16_t)KEYPAD_ADDRESS, (uint8_t)1);
+    if (Wire.available()) {
+      uint8_t readByte = Wire.read();
+      for (int c = 0; c < 3; c++) {
+        // ถ้าคอลัมน์ไหนโดนดึงเป็น LOW แสดงว่าปุ่มนั้นถูกกด
+        if ((readByte & (1 << colPins[c])) == 0) {
+          // รีเซ็ตขากลับเป็น HIGH
+          Wire.beginTransmission(KEYPAD_ADDRESS);
+          Wire.write(0xFF);
+          Wire.endTransmission();
+          return keys[r][c]; 
+        }
+      }
+    }
+  }
+  
+  // รีเซ็ตขากลับเป็น HIGH
+  Wire.beginTransmission(KEYPAD_ADDRESS);
+  Wire.write(0xFF);
+  Wire.endTransmission();
+  return 'N';
+}
+
+// ฟังก์ชันอัปเดตหน้าจอ LCD
+void updateDisplay() {
+  lcd.clear();
+  if (uiState == 0) {
+    lcd.setCursor(0, 0);
+    lcd.print("Length (mm):"); 
+    lcd.setCursor(0, 1);
+    lcd.print("> " + inputLength);
+  } 
+  else if (uiState == 1) {
+    lcd.setCursor(0, 0);
+    lcd.print("Quantity (pcs):");
+    lcd.setCursor(0, 1);
+    lcd.print("> " + inputQty);
+  }
+  else if (uiState == 2) {
+    lcd.setCursor(0, 0);
+    lcd.print("L:" + inputLength + "mm Q:" + inputQty);
+    lcd.setCursor(0, 1);
+    lcd.print("Press OK to Cut!"); 
+  }
+}
+
+// ฟังก์ชันแสดงข้อความแจ้งเตือน (Error)
+void showError(String msg) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Error:");
+  lcd.setCursor(0, 1);
+  lcd.print(msg);
+  delay(2000); // โชว์ค้าง 2 วินาที
+  updateDisplay(); // กลับหน้าเดิม
+}
+
+void loop() {
+  // --- 1. ตรวจสอบการกด Keypad ---
+  char customKey = readKeypad();
+  if (customKey != 'N' && customKey != 'E' && customKey != lastKey) {
+    
+    // พิมพ์ตัวเลข
+    if (customKey >= '0' && customKey <= '9') {
+      if (uiState == 0 && inputLength.length() < 4) {
+        inputLength += customKey;
+        updateDisplay();
+      } 
+      else if (uiState == 1 && inputQty.length() < 4) {
+        inputQty += customKey;
+        updateDisplay();
+      }
+    }
+    // ปุ่ม * ใช้เป็นปุ่ม Backspace (ลบตัวเลข)
+    else if (customKey == '*') {
+      if (uiState == 0 && inputLength.length() > 0) {
+        inputLength.remove(inputLength.length() - 1);
+        updateDisplay();
+      }
+      else if (uiState == 1 && inputQty.length() > 0) {
+        inputQty.remove(inputQty.length() - 1);
+        updateDisplay();
+      }
+    }
+    delay(50); 
+  }
+  lastKey = (customKey == 'N') ? 'N' : customKey;
+
+
+  // --- 2. อ่านค่า 4 ปุ่มกดจาก Address 0x38 ---
+  bool curOk = HIGH, curCancel = HIGH, curBack = HIGH, curNext = HIGH;
+  
+  Wire.requestFrom((uint16_t)BUTTON_ADDRESS, (uint8_t)1);
+  if (Wire.available()) {
+    uint8_t btnState = Wire.read();
+    
+    // ลอจิก 0 (LOW) คือกดปุ่ม
+    curOk     = (btnState & (1 << 0)) ? HIGH : LOW; // P0 = OK
+    curCancel = (btnState & (1 << 1)) ? HIGH : LOW; // P1 = CANCEL
+    curBack   = (btnState & (1 << 2)) ? HIGH : LOW; // P2 = BACK
+    curNext   = (btnState & (1 << 3)) ? HIGH : LOW; // P3 = NEXT
+  }
+
+  // --- จัดการปุ่ม NEXT ---
+  if (lastBtnNext == HIGH && curNext == LOW) {
+    if (uiState == 0) {
+      if (inputLength == "") showError("Pls specify size");
+      else { uiState = 1; updateDisplay(); }
+    }
+    delay(50);
+  }
+  
+  // --- จัดการปุ่ม OK (ยืนยัน) ---
+  if (lastBtnOk == HIGH && curOk == LOW) {
+    if (uiState == 1) {
+      if (inputQty == "") showError("Please fill qty!");
+      else { uiState = 2; updateDisplay(); }
+    }
+    else if (uiState == 2) {
+      // หน้าจอแสดงการส่งข้อมูลไปเครื่องหลัก (รอใส่โค้ด ESP-NOW ในอนาคต)
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Sending Data...");
+      Serial.println("ยืนยัน! เตรียมส่งข้อมูล: ยาว " + inputLength + " มม. จำนวน " + inputQty + " ชิ้น");
+      delay(2000);
+      
+      // ส่งเสร็จกลับมารอรับค่าใหม่
+      inputLength = ""; inputQty = ""; uiState = 0;
+      updateDisplay();
+    }
+    delay(50);
+  }
+
+  // --- จัดการปุ่ม BACK (ย้อนกลับ) ---
+  if (lastBtnBack == HIGH && curBack == LOW) {
+    if (uiState == 1) { uiState = 0; updateDisplay(); } 
+    else if (uiState == 2) { uiState = 1; updateDisplay(); }
+    delay(50);
+  }
+
+  // --- จัดการปุ่ม CANCEL (ยกเลิก/ล้างค่า) ---
+  if (lastBtnCancel == HIGH && curCancel == LOW) {
+    inputLength = ""; inputQty = ""; uiState = 0;
+    updateDisplay();
+    delay(50);
+  }
+
+  // อัปเดตสถานะปุ่ม
+  lastBtnNext = curNext;
+  lastBtnOk = curOk;
+  lastBtnBack = curBack;
+  lastBtnCancel = curCancel;
+  
+  delay(10); 
+}
