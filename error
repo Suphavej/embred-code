@@ -1,0 +1,13 @@
+C:\Users\Asus\OneDrive\Dokumen\Arduino\Finalproject\Finalproject.ino: In function 'void setup()':
+C:\Users\Asus\OneDrive\Dokumen\Arduino\Finalproject\Finalproject.ino:28:28: error: invalid conversion from 'void (*)(const uint8_t*, const uint8_t*, int)' {aka 'void (*)(const unsigned char*, const unsigned char*, int)'} to 'esp_now_recv_cb_t' {aka 'void (*)(const esp_now_recv_info*, const unsigned char*, int)'} [-fpermissive]
+   28 |   esp_now_register_recv_cb(OnDataRecv);
+      |                            ^~~~~~~~~~
+      |                            |
+      |                            void (*)(const uint8_t*, const uint8_t*, int) {aka void (*)(const unsigned char*, const unsigned char*, int)}
+In file included from C:\Users\Asus\OneDrive\Dokumen\Arduino\Finalproject\Finalproject.ino:2:
+C:\Users\Asus\AppData\Local\Arduino15\packages\esp32\tools\esp32-arduino-libs\idf-release_v5.5-f1a1df9b-v3\esp32/include/esp_wifi/include/esp_now.h:189:54: note:   initializing argument 1 of 'esp_err_t esp_now_register_recv_cb(esp_now_recv_cb_t)'
+  189 | esp_err_t esp_now_register_recv_cb(esp_now_recv_cb_t cb);
+      |                                    ~~~~~~~~~~~~~~~~~~^~
+exit status 1
+
+Compilation error: invalid conversion from 'void (*)(const uint8_t*, const uint8_t*, int)' {aka 'void (*)(const unsigned char*, const unsigned char*, int)'} to 'esp_now_recv_cb_t' {aka 'void (*)(const esp_now_recv_info*, const unsigned char*, int)'} [-fpermissive]
