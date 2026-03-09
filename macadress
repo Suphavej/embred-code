@@ -1,0 +1,25 @@
+// ==========================================
+// โค้ดสำหรับหา MAC Address ของบอร์ด ESP32
+// ==========================================
+#include <WiFi.h>
+
+void setup() {
+  Serial.begin(115200);
+  
+  // ตั้งค่า WiFi ให้อยู่ในโหมด Station เพื่อให้ได้ MAC Address ที่ถูกต้องสำหรับ ESP-NOW
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+
+  Serial.println();
+  Serial.println("=========================================");
+  Serial.print("MAC Address ของบอร์ดนี้คือ: ");
+  // พิมพ์ MAC Address ออกมาทาง Serial Monitor
+  Serial.println(WiFi.macAddress()); 
+  Serial.println("=========================================");
+  Serial.println("นำเลขด้านบนนี้ ไปใส่ในตัวแปร broadcastAddress ของโค้ดฝั่งรีโมทได้เลยครับ");
+}
+
+void loop() {
+  // ไม่ต้องทำอะไรในส่วนนี้
+}
