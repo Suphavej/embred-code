@@ -7,7 +7,7 @@ typedef struct struct_message {
 
 struct_message data;
 
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+void OnDataRecv(const esp_now_recv_info *info, const uint8_t *incomingData, int len) {
 
   memcpy(&data, incomingData, sizeof(data));
 
