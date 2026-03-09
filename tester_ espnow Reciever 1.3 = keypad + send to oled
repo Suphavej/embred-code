@@ -1,5 +1,6 @@
 // ==========================================
-// เครื่องตัดท่อหด + ESP NOW Remote Receiver
+// MACHINE RECEIVER
+// LCD + CUTTER + ESP NOW
 // ==========================================
 
 #include <Wire.h>
@@ -10,7 +11,7 @@
 #include <esp_now.h>
 
 // ---------------- LCD ----------------
-LiquidCrystal_I2C lcd(0x27, 16, 2);
+LiquidCrystal_I2C lcd(0x27,16,2);
 
 const uint8_t KEYPAD_ADDRESS = 0x20;
 const uint8_t BUTTON_ADDRESS = 0x38;
@@ -22,8 +23,7 @@ const uint8_t BUTTON_ADDRESS = 0x38;
 #define SM_IN4 17
 
 const int stepsPerRevolution = 2048;
-
-Stepper myStepper(stepsPerRevolution, SM_IN1, SM_IN3, SM_IN2, SM_IN4);
+Stepper myStepper(stepsPerRevolution,SM_IN1,SM_IN3,SM_IN2,SM_IN4);
 
 const float STEPS_PER_MM = 65.0;
 
@@ -36,40 +36,64 @@ Servo myServo;
 #define IR_SENSOR2 32
 #define IR_SENSOR3 33
 
-// ---------------- Keypad ----------------
-const uint8_t rowPins[4] = {1,6,5,3};
-const uint8_t colPins[3] = {2,0,4};
+// ---------------- ESP NOW ----------------
 
-const char keys[4][3] = {
+// MAC ของ Remote
+uint8_t remoteMAC[] = {0xB0,0xCB,0xD8,0xC5,0xBB,0x20};
+
+typedef struct{
+char key;
+}KeyData;
+
+typedef struct{
+char line1[17];
+char line2[17];
+}DisplayData;
+
+KeyData remoteKeyData;
+DisplayData displayData;
+
+char remoteKey='N';
+
+// ---------- RECEIVE KEYPAD ----------
+
+void OnDataRecv(const esp_now_recv_info *info,const uint8_t *data,int len){
+
+memcpy(&remoteKeyData,data,sizeof(remoteKeyData));
+
+remoteKey = remoteKeyData.key;
+
+Serial.print("Remote Key: ");
+Serial.println(remoteKey);
+
+}
+
+// ---------- SEND DISPLAY ----------
+
+void sendDisplay(String l1,String l2){
+
+l1.toCharArray(displayData.line1,17);
+l2.toCharArray(displayData.line2,17);
+
+esp_now_send(remoteMAC,(uint8_t*)&displayData,sizeof(displayData));
+
+}
+
+// ---------------- Keypad ----------------
+
+const uint8_t rowPins[4]={1,6,5,3};
+const uint8_t colPins[3]={2,0,4};
+
+const char keys[4][3]={
 {'1','2','3'},
 {'4','5','6'},
 {'7','8','9'},
 {'*','0','#'}
 };
 
-// ---------------- ESP NOW ----------------
-
-typedef struct {
-  char key;
-} RemoteData;
-
-RemoteData remoteData;
-
-char remoteKey = 'N';
-
-void OnDataRecv(const esp_now_recv_info *info, const uint8_t *data, int len){
-
-  memcpy(&remoteData,data,sizeof(remoteData));
-
-  remoteKey = remoteData.key;
-
-  Serial.print("Remote Key: ");
-  Serial.println(remoteKey);
-}
-
 // ---------------- UI ----------------
 
-int uiState = 0;
+int uiState=0;
 
 String inputLength="";
 String inputQty="";
@@ -80,7 +104,7 @@ int lastTubeLevel=-1;
 
 bool lastBtnOk=HIGH,lastBtnCancel=HIGH,lastBtnBack=HIGH,lastBtnNext=HIGH;
 
-// ----------------------------------------------------
+// ------------------------------------------------
 
 void setup(){
 
@@ -110,26 +134,36 @@ myServo.setPeriodHertz(50);
 myServo.attach(SERVO_PIN,400,2400);
 myServo.write(0);
 
-// ---------------- ESP NOW ----------------
+// ---------- ESP NOW ----------
 
 WiFi.mode(WIFI_STA);
 
 if(esp_now_init()!=ESP_OK){
+
 Serial.println("ESP NOW INIT FAIL");
 return;
+
 }
 
 esp_now_register_recv_cb(OnDataRecv);
 
-Serial.println("ESP NOW READY");
+// add remote peer
+esp_now_peer_info_t peerInfo={};
 
-// -----------------------------------------
+memcpy(peerInfo.peer_addr,remoteMAC,6);
+
+peerInfo.channel=0;
+peerInfo.encrypt=false;
+
+esp_now_add_peer(&peerInfo);
+
+Serial.println("MACHINE READY");
 
 updateDisplay();
 
 }
 
-// ----------------------------------------------------
+// ------------------------------------------------
 
 int getTubeLevel(){
 
@@ -143,7 +177,7 @@ return count;
 
 }
 
-// ----------------------------------------------------
+// ------------------------------------------------
 
 char readKeypad(){
 
@@ -155,6 +189,7 @@ writeByte&=~(1<<rowPins[r]);
 
 Wire.beginTransmission(KEYPAD_ADDRESS);
 Wire.write(writeByte);
+
 if(Wire.endTransmission()!=0) return 'E';
 
 Wire.requestFrom((uint16_t)KEYPAD_ADDRESS,(uint8_t)1);
@@ -189,64 +224,63 @@ return 'N';
 
 }
 
-// ----------------------------------------------------
+// ------------------------------------------------
 
 void updateDisplay(){
 
 lcd.clear();
+
+String line1="";
+String line2="";
 
 int tubeLvl=getTubeLevel();
 
 String tubeStr="";
 
 if(tubeLvl==3) tubeStr="Full";
-else if(tubeLvl==2) tubeStr="Mid ";
-else if(tubeLvl==1) tubeStr="Low ";
-else tubeStr="Emp!";
+else if(tubeLvl==2) tubeStr="Mid";
+else if(tubeLvl==1) tubeStr="Low";
+else tubeStr="Emp";
+
+// ----- UI -----
 
 if(uiState==0){
 
-lcd.setCursor(0,0);
-lcd.print("Len(mm):");
-
-lcd.setCursor(12,0);
-lcd.print(tubeStr);
-
-lcd.setCursor(0,1);
-lcd.print("> "+inputLength);
+line1="Len(mm): "+tubeStr;
+line2="> "+inputLength;
 
 }
 
 else if(uiState==1){
 
-lcd.setCursor(0,0);
-lcd.print("Qty(pcs):");
-
-lcd.setCursor(12,0);
-lcd.print(tubeStr);
-
-lcd.setCursor(0,1);
-lcd.print("> "+inputQty);
+line1="Qty(pcs): "+tubeStr;
+line2="> "+inputQty;
 
 }
 
 else if(uiState==2){
 
+line1="L:"+inputLength+" Q:"+inputQty;
+line2="Press OK";
+
+}
+
 lcd.setCursor(0,0);
-lcd.print("L:"+inputLength+"mm Q:"+inputQty);
+lcd.print(line1);
 
 lcd.setCursor(0,1);
-lcd.print("Press OK to Cut!");
+lcd.print(line2);
+
+// ส่งไป remote
+sendDisplay(line1,line2);
 
 }
 
-}
-
-// ----------------------------------------------------
+// ------------------------------------------------
 
 void loop(){
 
-// -------- Tube level --------
+// -------- tube level --------
 
 int currentTubeLevel=getTubeLevel();
 
@@ -262,7 +296,7 @@ updateDisplay();
 
 char customKey = readKeypad();
 
-// รับค่าจาก remote
+// remote key
 if(remoteKey!='N'){
 customKey = remoteKey;
 remoteKey='N';
@@ -315,118 +349,6 @@ delay(50);
 }
 
 lastKey=(customKey=='N')?'N':customKey;
-
-// -------- Buttons --------
-
-bool curOk=HIGH,curCancel=HIGH,curBack=HIGH,curNext=HIGH;
-
-Wire.requestFrom((uint16_t)BUTTON_ADDRESS,(uint8_t)1);
-
-if(Wire.available()){
-
-uint8_t btnState=Wire.read();
-
-curOk=(btnState&(1<<0))?HIGH:LOW;
-curCancel=(btnState&(1<<1))?HIGH:LOW;
-curBack=(btnState&(1<<2))?HIGH:LOW;
-curNext=(btnState&(1<<3))?HIGH:LOW;
-
-}
-
-// NEXT
-
-if(lastBtnNext==HIGH && curNext==LOW){
-
-if(uiState==0){
-
-if(inputLength==""){
-
-lcd.clear();
-lcd.print("Pls specify size");
-delay(1500);
-updateDisplay();
-
-}
-
-else{
-
-uiState=1;
-updateDisplay();
-
-}
-
-}
-
-delay(50);
-
-}
-
-// OK
-
-if(lastBtnOk==HIGH && curOk==LOW){
-
-if(uiState==1){
-
-if(inputQty==""){
-
-lcd.clear();
-lcd.print("Please fill qty!");
-delay(1500);
-updateDisplay();
-
-}
-
-else{
-
-uiState=2;
-updateDisplay();
-
-}
-
-}
-
-delay(50);
-
-}
-
-// BACK
-
-if(lastBtnBack==HIGH && curBack==LOW){
-
-if(uiState==1){
-uiState=0;
-updateDisplay();
-}
-
-else if(uiState==2){
-uiState=1;
-updateDisplay();
-}
-
-delay(50);
-
-}
-
-// CANCEL
-
-if(lastBtnCancel==HIGH && curCancel==LOW){
-
-inputLength="";
-inputQty="";
-uiState=0;
-
-lastTubeLevel=-1;
-
-updateDisplay();
-
-delay(50);
-
-}
-
-lastBtnNext=curNext;
-lastBtnOk=curOk;
-lastBtnBack=curBack;
-lastBtnCancel=curCancel;
 
 delay(10);
 
