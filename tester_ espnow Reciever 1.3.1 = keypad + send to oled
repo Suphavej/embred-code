@@ -38,7 +38,7 @@ Servo myServo;
 
 // ---------------- ESP NOW ----------------
 
-// MAC ของ Remote
+// MAC Remote
 uint8_t remoteMAC[] = {0xB0,0xCB,0xD8,0xC5,0xBB,0x20};
 
 typedef struct{
@@ -55,7 +55,7 @@ DisplayData displayData;
 
 char remoteKey='N';
 
-// ---------- RECEIVE KEYPAD ----------
+// ---------- RECEIVE KEYPAD FROM REMOTE ----------
 
 void OnDataRecv(const esp_now_recv_info *info,const uint8_t *data,int len){
 
@@ -68,7 +68,7 @@ Serial.println(remoteKey);
 
 }
 
-// ---------- SEND DISPLAY ----------
+// ---------- SEND LCD TO REMOTE ----------
 
 void sendDisplay(String l1,String l2){
 
@@ -100,9 +100,9 @@ String inputQty="";
 
 char lastKey='N';
 
-int lastTubeLevel=-1;
+unsigned long lastPress=0;
 
-bool lastBtnOk=HIGH,lastBtnCancel=HIGH,lastBtnBack=HIGH,lastBtnNext=HIGH;
+int lastTubeLevel=-1;
 
 // ------------------------------------------------
 
@@ -184,13 +184,11 @@ char readKeypad(){
 for(int r=0;r<4;r++){
 
 uint8_t writeByte=0xFF;
-
 writeByte&=~(1<<rowPins[r]);
 
 Wire.beginTransmission(KEYPAD_ADDRESS);
 Wire.write(writeByte);
-
-if(Wire.endTransmission()!=0) return 'E';
+Wire.endTransmission();
 
 Wire.requestFrom((uint16_t)KEYPAD_ADDRESS,(uint8_t)1);
 
@@ -205,6 +203,8 @@ if((readByte&(1<<colPins[c]))==0){
 Wire.beginTransmission(KEYPAD_ADDRESS);
 Wire.write(0xFF);
 Wire.endTransmission();
+
+delay(20);   // debounce
 
 return keys[r][c];
 
@@ -271,7 +271,7 @@ lcd.print(line1);
 lcd.setCursor(0,1);
 lcd.print(line2);
 
-// ส่งไป remote
+// send to remote
 sendDisplay(line1,line2);
 
 }
@@ -284,7 +284,7 @@ void loop(){
 
 int currentTubeLevel=getTubeLevel();
 
-if(currentTubeLevel!=lastTubeLevel && (uiState==0 || uiState==1)){
+if(currentTubeLevel!=lastTubeLevel){
 
 lastTubeLevel=currentTubeLevel;
 
@@ -298,18 +298,25 @@ char customKey = readKeypad();
 
 // remote key
 if(remoteKey!='N'){
+
 customKey = remoteKey;
 remoteKey='N';
+
 }
 
-if(customKey!='N' && customKey!='E' && customKey!=lastKey){
+// -------- key process --------
 
+if(customKey!='N' && customKey!='E' && customKey!=lastKey
+&& millis()-lastPress>120){
+
+lastPress=millis();
+
+// number
 if(customKey>='0' && customKey<='9'){
 
 if(uiState==0 && inputLength.length()<4){
 
 inputLength+=customKey;
-
 updateDisplay();
 
 }
@@ -317,19 +324,18 @@ updateDisplay();
 else if(uiState==1 && inputQty.length()<4){
 
 inputQty+=customKey;
-
 updateDisplay();
 
 }
 
 }
 
+// delete
 else if(customKey=='*'){
 
 if(uiState==0 && inputLength.length()>0){
 
 inputLength.remove(inputLength.length()-1);
-
 updateDisplay();
 
 }
@@ -337,18 +343,39 @@ updateDisplay();
 else if(uiState==1 && inputQty.length()>0){
 
 inputQty.remove(inputQty.length()-1);
-
 updateDisplay();
 
 }
 
 }
 
-delay(50);
+// confirm
+else if(customKey=='#'){
+
+if(uiState==0 && inputLength.length()>0){
+
+uiState=1;
+updateDisplay();
 
 }
 
-lastKey=(customKey=='N')?'N':customKey;
+else if(uiState==1 && inputQty.length()>0){
+
+uiState=2;
+updateDisplay();
+
+}
+
+}
+
+}
+
+if(customKey=='N'){
+lastKey='N';
+}
+else{
+lastKey=customKey;
+}
 
 delay(10);
 
