@@ -38,7 +38,6 @@ Servo myServo;
 
 // ---------------- ESP NOW ----------------
 
-// MAC Remote
 uint8_t remoteMAC[] = {0xB0,0xCB,0xD8,0xC5,0xBB,0x20};
 
 typedef struct{
@@ -55,7 +54,7 @@ DisplayData displayData;
 
 char remoteKey='N';
 
-// ---------- RECEIVE KEYPAD FROM REMOTE ----------
+// ---------- RECEIVE REMOTE KEY ----------
 
 void OnDataRecv(const esp_now_recv_info *info,const uint8_t *data,int len){
 
@@ -68,7 +67,7 @@ Serial.println(remoteKey);
 
 }
 
-// ---------- SEND LCD TO REMOTE ----------
+// ---------- SEND DISPLAY TO REMOTE ----------
 
 void sendDisplay(String l1,String l2){
 
@@ -100,9 +99,14 @@ String inputQty="";
 
 char lastKey='N';
 
-unsigned long lastPress=0;
+bool lastBtnOk=HIGH;
+bool lastBtnCancel=HIGH;
+bool lastBtnBack=HIGH;
+bool lastBtnNext=HIGH;
 
 int lastTubeLevel=-1;
+
+unsigned long lastPress=0;
 
 // ------------------------------------------------
 
@@ -184,6 +188,7 @@ char readKeypad(){
 for(int r=0;r<4;r++){
 
 uint8_t writeByte=0xFF;
+
 writeByte&=~(1<<rowPins[r]);
 
 Wire.beginTransmission(KEYPAD_ADDRESS);
@@ -204,7 +209,7 @@ Wire.beginTransmission(KEYPAD_ADDRESS);
 Wire.write(0xFF);
 Wire.endTransmission();
 
-delay(20);   // debounce
+delay(20);
 
 return keys[r][c];
 
@@ -242,8 +247,6 @@ else if(tubeLvl==2) tubeStr="Mid";
 else if(tubeLvl==1) tubeStr="Low";
 else tubeStr="Emp";
 
-// ----- UI -----
-
 if(uiState==0){
 
 line1="Len(mm): "+tubeStr;
@@ -271,8 +274,21 @@ lcd.print(line1);
 lcd.setCursor(0,1);
 lcd.print(line2);
 
-// send to remote
 sendDisplay(line1,line2);
+
+}
+
+// ------------------------------------------------
+
+uint8_t readButtons(){
+
+Wire.requestFrom((uint16_t)BUTTON_ADDRESS,(uint8_t)1);
+
+if(Wire.available()){
+return Wire.read();
+}
+
+return 0xFF;
 
 }
 
@@ -296,7 +312,6 @@ updateDisplay();
 
 char customKey = readKeypad();
 
-// remote key
 if(remoteKey!='N'){
 
 customKey = remoteKey;
@@ -311,7 +326,6 @@ if(customKey!='N' && customKey!='E' && customKey!=lastKey
 
 lastPress=millis();
 
-// number
 if(customKey>='0' && customKey<='9'){
 
 if(uiState==0 && inputLength.length()<4){
@@ -330,7 +344,6 @@ updateDisplay();
 
 }
 
-// delete
 else if(customKey=='*'){
 
 if(uiState==0 && inputLength.length()>0){
@@ -349,25 +362,6 @@ updateDisplay();
 
 }
 
-// confirm
-else if(customKey=='#'){
-
-if(uiState==0 && inputLength.length()>0){
-
-uiState=1;
-updateDisplay();
-
-}
-
-else if(uiState==1 && inputQty.length()>0){
-
-uiState=2;
-updateDisplay();
-
-}
-
-}
-
 }
 
 if(customKey=='N'){
@@ -376,6 +370,82 @@ lastKey='N';
 else{
 lastKey=customKey;
 }
+
+// -------- buttons --------
+
+uint8_t btnState = readButtons();
+
+bool curOk     = (btnState&(1<<0))?HIGH:LOW;
+bool curCancel = (btnState&(1<<1))?HIGH:LOW;
+bool curBack   = (btnState&(1<<2))?HIGH:LOW;
+bool curNext   = (btnState&(1<<3))?HIGH:LOW;
+
+if(lastBtnNext==HIGH && curNext==LOW){
+
+if(uiState==0){
+
+if(inputLength==""){
+}
+else{
+uiState=1;
+updateDisplay();
+}
+
+}
+
+delay(80);
+
+}
+
+if(lastBtnOk==HIGH && curOk==LOW){
+
+if(uiState==1){
+
+if(inputQty==""){
+}
+else{
+uiState=2;
+updateDisplay();
+}
+
+}
+
+delay(80);
+
+}
+
+if(lastBtnBack==HIGH && curBack==LOW){
+
+if(uiState==1){
+uiState=0;
+updateDisplay();
+}
+
+else if(uiState==2){
+uiState=1;
+updateDisplay();
+}
+
+delay(80);
+
+}
+
+if(lastBtnCancel==HIGH && curCancel==LOW){
+
+inputLength="";
+inputQty="";
+uiState=0;
+
+updateDisplay();
+
+delay(80);
+
+}
+
+lastBtnOk=curOk;
+lastBtnCancel=curCancel;
+lastBtnBack=curBack;
+lastBtnNext=curNext;
 
 delay(10);
 
