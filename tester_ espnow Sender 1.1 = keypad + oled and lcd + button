@@ -22,6 +22,12 @@ const char keys[4][3] = {
 {'*','0','#'}
 };
 
+// -------- Buttons --------
+#define BTN_OK     32
+#define BTN_CANCEL 33
+#define BTN_BACK   25
+#define BTN_NEXT   26
+
 // -------- ESP NOW --------
 uint8_t machineMAC[] = {0xB0,0xCB,0xD8,0xC6,0xE8,0xD8};
 
@@ -39,8 +45,7 @@ DisplayData displayData;
 
 char lastKey='N';
 
-// ---------- RECEIVE DISPLAY FROM MACHINE ----------
-
+// ---------- RECEIVE LCD FROM MACHINE ----------
 void OnDataRecv(const esp_now_recv_info *info, const uint8_t *data, int len){
 
   memcpy(&displayData,data,sizeof(displayData));
@@ -57,8 +62,7 @@ void OnDataRecv(const esp_now_recv_info *info, const uint8_t *data, int len){
   display.display();
 }
 
-// ---------- SEND CALLBACK ----------
-
+// ---------- SEND STATUS ----------
 void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status){
 
   Serial.print("Send Status: ");
@@ -67,11 +71,9 @@ void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status){
     Serial.println("Success");
   else
     Serial.println("Fail");
-
 }
 
 // ---------- READ KEYPAD ----------
-
 char readKeypad(){
 
   for(int r=0;r<4;r++){
@@ -113,12 +115,16 @@ char readKeypad(){
 }
 
 // ---------- SETUP ----------
-
 void setup(){
 
   Serial.begin(115200);
 
   Wire.begin(21,22);
+
+  pinMode(BTN_OK,INPUT);
+  pinMode(BTN_CANCEL,INPUT);
+  pinMode(BTN_BACK,INPUT);
+  pinMode(BTN_NEXT,INPUT);
 
   // OLED
   display.begin(SSD1306_SWITCHCAPVCC,0x3C);
@@ -131,10 +137,8 @@ void setup(){
   display.println("READY");
   display.display();
 
-  // WiFi
   WiFi.mode(WIFI_STA);
 
-  // ESP NOW
   if(esp_now_init()!=ESP_OK){
     Serial.println("ESP NOW INIT FAIL");
     return;
@@ -143,37 +147,60 @@ void setup(){
   esp_now_register_recv_cb(OnDataRecv);
   esp_now_register_send_cb(OnDataSent);
 
-  // Peer
   esp_now_peer_info_t peerInfo = {};
-
   memcpy(peerInfo.peer_addr,machineMAC,6);
-
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
 
-  if(esp_now_add_peer(&peerInfo)!=ESP_OK){
-    Serial.println("Failed to add peer");
-    return;
-  }
-
+  esp_now_add_peer(&peerInfo);
 }
 
 // ---------- LOOP ----------
-
 void loop(){
 
   char key = readKeypad();
 
-  if(key!='N' && key!='E' && key!=lastKey){
+  // Keypad
+  if(key!='N' && key!=lastKey){
 
     sendKey.key = key;
 
     esp_now_send(machineMAC,(uint8_t*)&sendKey,sizeof(sendKey));
 
-    Serial.print("Send Key: ");
+    Serial.print("Send Keypad: ");
     Serial.println(key);
 
     delay(200);
+  }
+
+  // -------- BUTTONS --------
+
+  if(digitalRead(BTN_OK)==LOW){
+    sendKey.key='#';   // ENTER
+    esp_now_send(machineMAC,(uint8_t*)&sendKey,sizeof(sendKey));
+    Serial.println("Send: OK");
+    delay(300);
+  }
+
+  if(digitalRead(BTN_CANCEL)==LOW){
+    sendKey.key='*';   // CANCEL
+    esp_now_send(machineMAC,(uint8_t*)&sendKey,sizeof(sendKey));
+    Serial.println("Send: CANCEL");
+    delay(300);
+  }
+
+  if(digitalRead(BTN_BACK)==LOW){
+    sendKey.key='C';   // BACK
+    esp_now_send(machineMAC,(uint8_t*)&sendKey,sizeof(sendKey));
+    Serial.println("Send: BACK");
+    delay(300);
+  }
+
+  if(digitalRead(BTN_NEXT)==LOW){
+    sendKey.key='D';   // NEXT
+    esp_now_send(machineMAC,(uint8_t*)&sendKey,sizeof(sendKey));
+    Serial.println("Send: NEXT");
+    delay(300);
   }
 
   lastKey = key;
